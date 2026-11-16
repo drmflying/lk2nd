@@ -1,34 +1,141 @@
-name: Build lk2nd
+
+name: Build lk2nd - Redmi 4 Prime (markw)
+
 on:
-  workflow_call:
-    inputs:
-      platform:
-        type: string
-        required: true
-      options:
-        type: string
-      artifacts:
-        type: string
-        required: true
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-markw.yml"
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: ${{ inputs.platform }}
-    runs-on: ubuntu-latest
+    name: Build MSM8953 Xiaomi markw
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Install additional build dependencies
-        run: sudo apt-get update -yqq && sudo apt-get install -yqq device-tree-compiler
-      - name: Install cross compiler
-        uses: carlosperate/arm-none-eabi-gcc-action@v1
-      - run: arm-none-eabi-gcc --version
-      - uses: actions/checkout@v3
-      - name: Build
-        run: git clean -dxf && make -j$(nproc) TOOLCHAIN_PREFIX=arm-none-eabi-
-             ${{ inputs.options }} ${{ inputs.platform }}
-      - name: Archive artifacts
-        uses: actions/upload-artifact@v3
+      # 1. 检出当前 Fork 仓库
+      - name: Checkout source
+        uses: actions/checkout@v4
         with:
-          name: ${{ inputs.platform }}
-          path: ${{ inputs.artifacts }}
-    env:
-      LKLE_CFLAGS: -Werror
+          repository: ${{ github.repository }}
+          ref: ${{ github.ref }}
+          path: lk2nd
+
+      # 2. 检查 Redmi 4 Prime DTS
+      - name: Verify markw device tree
+        working-directory: lk2nd
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DTS="dts/msm8953-xiaomi-markw.dts"
+
+          test -f "$DTS"
+
+          grep -F \
+            'Xiaomi Redmi 4 Prime (markw)' \
+            "$DTS"
+
+          grep -F \
+            'msm8953-xiaomi-markw.dtb' \
+            dts/rules.mk
+
+          echo "Redmi 4 Prime DTS verified."
+
+      # 3. 安装编译环境
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            gcc-arm-none-eabi \
+            device-tree-compiler \
+            libfdt-dev \
+            python3
+
+      # 4. 编译 lk2nd
+      - name: Build lk2nd
+        working-directory: lk2nd
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          make -j"$(nproc)" \
+            TOOLCHAIN_PREFIX=arm-none-eabi- \
+            msm8953-secondary
+
+      # 5. 验证编译结果
+      - name: Verify build output
+        working-directory: lk2nd
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="build-msm8953-secondary/lk2nd.img"
+
+          if [ ! -s "$IMAGE" ]; then
+            echo "ERROR: lk2nd.img not found!"
+            exit 1
+          fi
+
+          DTB=$(find build-msm8953-secondary \
+            -type f \
+            -name "msm8953-xiaomi-markw.dtb" \
+            -print -quit)
+
+          if [ -z "$DTB" ] || [ ! -s "$DTB" ]; then
+            echo "ERROR: Redmi 4 Prime DTB not found!"
+            exit 1
+          fi
+
+          echo "Build successful!"
+          echo "Image: $IMAGE"
+          echo "Device tree: $DTB"
+
+          file "$IMAGE"
+          file "$DTB"
+
+          sha256sum "$IMAGE"
+          sha256sum "$DTB"
+
+      # 6. 整理文件
+      - name: Prepare artifacts
+        working-directory: lk2nd
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p ../artifacts
+
+          cp build-msm8953-secondary/lk2nd.img \
+            ../artifacts/lk2nd-markw.img
+
+          DTB=$(find build-msm8953-secondary \
+            -type f \
+            -name "msm8953-xiaomi-markw.dtb" \
+            -print -quit)
+
+          cp "$DTB" \
+            ../artifacts/msm8953-xiaomi-markw.dtb
+
+          cp dts/msm8953-xiaomi-markw.dts \
+            ../artifacts/msm8953-xiaomi-markw.dts
+
+          echo "Artifacts:"
+          ls -lh ../artifacts
+
+      # 7. 上传编译产物
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redmi-4-Prime-lk2nd-markw
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
